@@ -1,6 +1,6 @@
 {
-    "name": "oyudent",
-    "short_name": "oyudent",
+    "name": "Oyudent",
+    "short_name": "Oyudent",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",

@@ -1,8 +1,12 @@
 # Oyudent
 
-Mongolian Flutter dental learning, shopping, appointments, attendance, and clinic-membership prototype. Includes a local development API for accounts, courses, quizzes, and clinic invitations.
+The main app uses native Flutter screens backed by the Oyudent landing API at https://api.oyudent.com/landing/api/v1/. It includes news, brand and product catalogs, classroom and online course listings, course details and previews, and account sign-in.
 
-## Run locally
+Run the app on a phone or simulator with `flutter run`.
+
+The earlier dental learning, shopping, attendance, and clinic prototype runs separately using `--dart-define=OYUDENT_DEMO=true`.
+
+## Run the prototype locally
 
 In one terminal:
 
@@ -14,7 +18,7 @@ In another:
 
 ```sh
 flutter pub get
-flutter run -d chrome --dart-define=API_BASE_URL=http://localhost:8087
+flutter run -d chrome --dart-define=OYUDENT_DEMO=true --dart-define=API_BASE_URL=http://localhost:8087
 ```
 
 The current browser preview is served at http://localhost:8085. The local API listens only on 127.0.0.1:8087. Set OYUDENT_PORT to change its port and API_BASE_URL to match. The default SQLite database is under the workspace work/ directory; use OYUDENT_DB to change it. Never commit this database.

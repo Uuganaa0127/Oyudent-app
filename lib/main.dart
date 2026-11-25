@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 
 import 'work_hub.dart';
+import 'production_app.dart';
 import 'ui_components.dart';
 import 'api.dart';
 import 'auth_page.dart';
@@ -10,7 +11,8 @@ import 'classroom.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  runApp(const OyudentApp());
+  const demo = bool.fromEnvironment('OYUDENT_DEMO');
+  runApp(demo ? const OyudentApp() : const OyudentProductionApp());
 }
 
 const teal = Color(0xFF5351EE);
