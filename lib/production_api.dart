@@ -11,6 +11,21 @@ class ProductionApi {
   static const _key = 'oyudent.production.access';
   final _storage = const FlutterSecureStorage();
   String? _token;
+  String? _owner;
+  String? get localOwner => _owner;
+  Future<void> _rememberOwner(Record profile) async {
+    final id =
+        profile['id'] ??
+        profile['doctor_id'] ??
+        profile['doctorId'] ??
+        profile['username'] ??
+        profile['phone'];
+    if (id != null && id.toString().isNotEmpty) {
+      _owner = 'doctor/$id';
+      await _storage.write(key: '$_key.owner', value: _owner);
+    }
+  }
+
   bool get signedIn => _token != null;
 
   Future<Record> _request(
@@ -102,7 +117,10 @@ class ProductionApi {
   Future<Record?> restore() async {
     _token = await _storage.read(key: _key);
     if (_token == null) return null;
-    return detail('doctor/info', authenticated: true);
+    _owner = await _storage.read(key: '$_key.owner');
+    final profile = await detail('doctor/info', authenticated: true);
+    await _rememberOwner(profile);
+    return profile;
   }
 
   Future<Record> login(String phone, String password) async {
@@ -117,6 +135,7 @@ class ProductionApi {
     _token = token;
     try {
       final profile = await detail('doctor/info', authenticated: true);
+      await _rememberOwner(profile);
       await _storage.write(key: _key, value: token);
       return profile;
     } catch (_) {
@@ -127,6 +146,8 @@ class ProductionApi {
 
   Future<void> logout() async {
     _token = null;
+    _owner = null;
+    await _storage.delete(key: '$_key.owner');
     await _storage.delete(key: _key);
   }
 }

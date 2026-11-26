@@ -38,6 +38,7 @@ dependencies:
   flutter_secure_storage: ^11.1.1
   video_player: ^2.11.1
   url_launcher: ^6.3.3
+  local_auth: ^3.0.2
 
 dev_dependencies:
   flutter_test:
@@ -63,6 +64,11 @@ flutter:
   assets:
     - assets/dental-products.png
     - assets/oyudent-logo.png
+    - assets/fonts/Inter-OFL.txt
+  fonts:
+    - family: Inter
+      fonts:
+        - asset: assets/fonts/Inter.ttf
 
   # To add assets to your application, add an assets section, like this:
   # assets:

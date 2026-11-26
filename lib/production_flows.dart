@@ -132,12 +132,15 @@ class _CourseActions extends StatefulWidget {
     required this.data,
     required this.id,
     this.pointOnly = false,
+    this.startOnOpen = false,
+    this.onPurchased,
   });
   final ProductionApi api;
   final Catalog catalog;
   final Record data;
   final String id;
-  final bool pointOnly;
+  final bool pointOnly, startOnOpen;
+  final VoidCallback? onPurchased;
 
   @override
   State<_CourseActions> createState() => _CourseActionsState();
@@ -147,6 +150,18 @@ class _CourseActionsState extends State<_CourseActions> {
   bool busy = false;
   bool enrolled = false;
   Record? purchase;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.startOnOpen &&
+        widget.catalog == Catalog.courses &&
+        _registrationClosedReason(widget.data) == null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _start();
+      });
+    }
+  }
 
   Future<bool> _confirm(String label) async =>
       await showDialog<bool>(
@@ -169,18 +184,18 @@ class _CourseActionsState extends State<_CourseActions> {
 
   Future<void> _start() async {
     if (busy || widget.id.isEmpty) return;
-    if (!widget.api.signedIn) {
-      await _push(
-        context,
-        Scaffold(
-          appBar: AppBar(title: const Text('Профайл')),
-          body: _Profile(api: widget.api),
-        ),
-      );
-      if (!mounted || !widget.api.signedIn) return;
-    }
     setState(() => busy = true);
     try {
+      if (!widget.api.signedIn) {
+        await _push(
+          context,
+          Scaffold(
+            appBar: AppBar(title: const Text('Профайл')),
+            body: _Profile(api: widget.api, returnAfterLogin: true),
+          ),
+        );
+        if (!mounted || !widget.api.signedIn) return;
+      }
       if (widget.catalog == Catalog.courses) {
         final prices = await widget.api.list(
           Uri(
@@ -231,6 +246,7 @@ class _CourseActionsState extends State<_CourseActions> {
         'courseId': widget.id,
         'paymentType': choice['id'],
       });
+      widget.onPurchased?.call();
       if (mounted) setState(() => purchase = result);
     } catch (error) {
       if (mounted) _notice(context, _message(error));
@@ -330,7 +346,13 @@ class _CourseActionsState extends State<_CourseActions> {
     }
     if (widget.catalog == Catalog.courses) {
       final reason = _registrationClosedReason(widget.data);
-      if (reason != null) return Text(reason);
+      if (reason != null) {
+        return FilledButton.icon(
+          onPressed: null,
+          icon: const Icon(Icons.lock_outline),
+          label: Text('Бүртгүүлэх · $reason'),
+        );
+      }
     }
     return Padding(
       padding: const EdgeInsets.only(top: 16),
@@ -341,7 +363,7 @@ class _CourseActionsState extends State<_CourseActions> {
               ? 'Түр хүлээнэ үү…'
               : widget.catalog == Catalog.courses
               ? 'Бүртгүүлэх'
-              : 'Сургалт авах',
+              : 'Сургалтад бүртгүүлэх',
         ),
       ),
     );
@@ -429,6 +451,8 @@ class _EnrollmentReceipt extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          if (certificate != null)
+            _AttendanceCertificate(data: data, uri: certificate),
           for (final item in {
             'Сургалтын өдөр': _certificateDate(data['start_date']),
             'Төлөв': data['status_name'],
@@ -445,12 +469,91 @@ class _EnrollmentReceipt extends StatelessWidget {
                 title: Text(item.key),
                 subtitle: SelectableText(item.value.toString()),
               ),
-          if (certificate != null)
-            _AttendanceCertificate(data: data, uri: certificate),
         ],
       ),
     );
   }
+}
+
+class _CourseCertificates extends StatefulWidget {
+  const _CourseCertificates({
+    required this.api,
+    required this.courseId,
+    required this.modules,
+  });
+  final ProductionApi api;
+  final String courseId;
+  final List<Record> modules;
+  @override
+  State<_CourseCertificates> createState() => _CourseCertificatesState();
+}
+
+class _CourseCertificatesState extends State<_CourseCertificates> {
+  late Future<List<Record>> issued = load();
+  Future<List<Record>> load() async {
+    final all = await widget.api.list(
+      'training/certificate/list?no_paginate=1',
+      authenticated: true,
+    );
+    final modules = widget.modules
+        .map((m) => m['id']?.toString())
+        .whereType<String>()
+        .toSet();
+    return all.where((c) {
+      final course =
+          c['course_id'] ??
+          c['courseId'] ??
+          (c['course'] is Record ? c['course']['id'] : null);
+      if (course != null) return course.toString() == widget.courseId;
+      return modules.contains((c['module_id'] ?? c['moduleId'])?.toString());
+    }).toList();
+  }
+
+  @override
+  Widget build(BuildContext context) => _DetailSection(
+    title: 'Сертификат',
+    child: FutureBuilder(
+      future: issued,
+      builder: (context, s) {
+        if (s.hasError) {
+          return TextButton(
+            onPressed: () => setState(() {
+              issued = load();
+            }),
+            child: const Text('Сертификатыг дахин ачаалах'),
+          );
+        }
+        if (!s.hasData) return const LinearProgressIndicator();
+        if (s.data!.isEmpty) {
+          return const Text('Энэ сургалтын сертификат хараахан олгогдоогүй.');
+        }
+        return Column(
+          children: [
+            for (final cert in s.data!)
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: const Icon(Icons.workspace_premium, color: _brand),
+                title: Text(
+                  text(cert, ['module_title', 'course_title']).isEmpty
+                      ? 'Олгосон сертификат'
+                      : text(cert, ['module_title', 'course_title']),
+                ),
+                subtitle: Text(text(cert, ['certificate_no'])),
+                trailing: const Icon(Icons.arrow_outward),
+                onTap: () => _push(
+                  context,
+                  _Details(
+                    api: widget.api,
+                    catalog: Catalog.certificates,
+                    row: cert,
+                  ),
+                ),
+              ),
+          ],
+        );
+      },
+    ),
+  );
 }
 
 class _CertificateView extends StatelessWidget {
@@ -458,37 +561,72 @@ class _CertificateView extends StatelessWidget {
   final Record data;
 
   @override
-  Widget build(BuildContext context) => Card(
-    elevation: 0,
-    margin: const EdgeInsets.only(top: 16),
-    child: Padding(
-      padding: const EdgeInsets.all(24),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Icon(Icons.workspace_premium_outlined, color: _brand, size: 36),
-          const SizedBox(height: 12),
-          Text(
-            text(data, ['doctor_name']),
-            style: Theme.of(context).textTheme.titleLarge,
-          ),
-          for (final value in [
-            data['course_title'],
-            data['module_title'],
-            data['certificate_no'],
-            if (_certificateDate(data['issued_at']).isNotEmpty)
-              'Олгосон өдөр · ${_certificateDate(data['issued_at'])}',
-          ])
-            if (value != null && value.toString().isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.only(top: 6),
-                child: SelectableText(value.toString()),
-              ),
-          if (data['score'] != null) Text('Оноо: ${data['score']}%'),
-        ],
+  Widget build(BuildContext context) {
+    final name = text(data, ['doctor_name']);
+    final no = text(data, ['certificate_no']);
+    final date = _certificateDate(data['issued_at']);
+    return Container(
+      margin: const EdgeInsets.only(top: 14),
+      padding: const EdgeInsets.all(7),
+      decoration: BoxDecoration(
+        color: const Color(0xfffcfcf3),
+        border: Border.all(color: const Color(0xffb4c6ad)),
+        borderRadius: BorderRadius.circular(17),
       ),
-    ),
-  );
+      child: Container(
+        padding: const EdgeInsets.all(22),
+        decoration: BoxDecoration(
+          border: Border.all(color: const Color(0xffd1d9bb)),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Column(
+          children: [
+            const Icon(
+              Icons.workspace_premium_rounded,
+              size: 44,
+              color: _brand,
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Сертификат',
+              style: TextStyle(
+                fontFamily: 'serif',
+                fontSize: 26,
+                color: _night,
+              ),
+            ),
+            const SizedBox(height: 14),
+            if (name.isNotEmpty)
+              SelectableText(
+                name,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            for (final value in [data['course_title'], data['module_title']])
+              if (value is String && value.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: SelectableText(value, textAlign: TextAlign.center),
+                ),
+            const Divider(height: 28),
+            Wrap(
+              spacing: 18,
+              runSpacing: 8,
+              alignment: WrapAlignment.center,
+              children: [
+                if (no.isNotEmpty) SelectableText(no),
+                if (date.isNotEmpty) Text(date),
+                if (data['score'] != null) Text("${data['score']}%"),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 class _QuizScreen extends StatefulWidget {
@@ -790,7 +928,9 @@ class _LessonScreenState extends State<_LessonScreen> {
         if (snapshot.hasError) {
           return _Retry(
             error: snapshot.error!,
-            retry: () => setState(() => ready = _load()),
+            retry: () => setState(() {
+              ready = _load();
+            }),
           );
         }
         final controller = player;

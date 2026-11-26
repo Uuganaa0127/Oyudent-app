@@ -1,6 +1,9 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart'
+    show LicenseEntryWithLineBreaks, LicenseRegistry;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show rootBundle;
 
 import 'work_hub.dart';
 import 'production_app.dart';
@@ -11,6 +14,11 @@ import 'classroom.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
+  LicenseRegistry.addLicense(() async* {
+    yield LicenseEntryWithLineBreaks([
+      'Inter',
+    ], await rootBundle.loadString('assets/fonts/Inter-OFL.txt'));
+  });
   const demo = bool.fromEnvironment('OYUDENT_DEMO');
   runApp(demo ? const OyudentApp() : const OyudentProductionApp());
 }

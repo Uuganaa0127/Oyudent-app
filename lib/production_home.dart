@@ -1,9 +1,19 @@
 part of 'production_app.dart';
 
+enum _HomeFeed {
+  banners('banner/list?no_paginate=1'),
+  online('training/catalog?size=6'),
+  products('product/list?size=6&is_show_landing=true&sort=-created_at'),
+  classroom('course/no/list?no_paginate=1&sort=-created_at');
+
+  const _HomeFeed(this.path);
+  final String path;
+}
+
 class _Landing extends StatefulWidget {
-  const _Landing({required this.api, required this.onPoints});
+  const _Landing({required this.api, required this.gameTile});
+  final Widget gameTile;
   final ProductionApi api;
-  final VoidCallback onPoints;
 
   @override
   State<_Landing> createState() => _LandingState();
@@ -11,40 +21,66 @@ class _Landing extends StatefulWidget {
 
 class _LandingState extends State<_Landing> {
   final banners = PageController();
+  final data = <_HomeFeed, List<Record>>{};
+  final errors = <_HomeFeed>{};
+  Future<void>? pending;
   int active = 0;
-  late Future<List<Record>> bannerRows = _loadBanners();
-  late Map<Catalog, Future<List<Record>>> shelves = _loadShelves();
 
-  Future<List<Record>> _loadBanners() =>
-      widget.api.list('banner/list?no_paginate=1');
+  @override
+  void initState() {
+    super.initState();
+    pending = _load(_HomeFeed.values);
+  }
 
-  Map<Catalog, Future<List<Record>>> _loadShelves() => {
-    Catalog.training: widget.api.list('training/catalog?size=6'),
-    Catalog.products: widget.api.list(
-      'product/list?size=6&is_show_landing=true&sort=-created_at',
-    ),
-    Catalog.courses: widget.api
-        .list('course/no/list?no_paginate=1&sort=-created_at')
-        .then((rows) => _openCoursesFirst(rows).take(3).toList()),
-    Catalog.news: widget.api.list('news/list?size=6&sort=-created_at'),
-  };
-
-  Future<void> _refresh() async {
-    if (banners.hasClients) banners.jumpToPage(0);
-    setState(() {
-      active = 0;
-      bannerRows = _loadBanners();
-      shelves = _loadShelves();
-    });
+  Future<void> _load(Iterable<_HomeFeed> feeds) async {
     await Future.wait(
-      [bannerRows, ...shelves.values].map((future) async {
+      feeds.map((feed) async {
         try {
-          await future;
+          final rows = await widget.api.list(feed.path);
+          if (!mounted) return;
+          setState(() {
+            data[feed] = feed == _HomeFeed.classroom
+                ? _availableCourses(rows).take(3).toList()
+                : rows;
+            errors.remove(feed);
+          });
         } catch (_) {
-          /* Sections display their own status. */
+          if (mounted) {
+            setState(() {
+              errors.add(feed);
+            });
+          }
         }
       }),
     );
+    if (mounted) {
+      setState(() {
+        pending = null;
+      });
+    }
+  }
+
+  Future<void> _refresh({bool retry = false}) {
+    final loading = pending;
+    if (loading != null) return loading;
+    if (banners.hasClients) banners.jumpToPage(0);
+    final refresh = _load(retry ? errors.toList() : _HomeFeed.values);
+    setState(() {
+      active = 0;
+      pending = refresh;
+    });
+    return refresh;
+  }
+
+  List<_Story> get stories {
+    final online = data[_HomeFeed.online] ?? [];
+    final classroom = data[_HomeFeed.classroom] ?? [];
+    return [
+      for (var i = 0; i < online.length || i < classroom.length; i++) ...[
+        if (i < online.length) (catalog: Catalog.training, row: online[i]),
+        if (i < classroom.length) (catalog: Catalog.courses, row: classroom[i]),
+      ],
+    ];
   }
 
   @override
@@ -54,134 +90,123 @@ class _LandingState extends State<_Landing> {
   }
 
   @override
-  Widget build(BuildContext context) => RefreshIndicator(
-    onRefresh: _refresh,
-    child: ListView(
-      key: const PageStorageKey('oyudent-home'),
-      physics: const AlwaysScrollableScrollPhysics(),
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-      children: [
-        _CatalogShortcuts(api: widget.api),
-        Card(
-          elevation: 0,
-          color: Colors.white,
-          child: ListTile(
-            leading: const CircleAvatar(
-              backgroundColor: Color(0xffe9e6ff),
-              child: Icon(Icons.stars_outlined, color: _brand),
+  Widget build(BuildContext context) {
+    const loader = SizedBox(
+      width: 120,
+      child: LinearProgressIndicator(
+        key: ValueKey('home-loading'),
+        semanticsLabel: 'Нүүр хуудсыг ачаалж байна',
+        minHeight: 3,
+        borderRadius: BorderRadius.all(Radius.circular(3)),
+      ),
+    );
+    if (pending != null && data.isEmpty && errors.isEmpty) {
+      return const Center(child: loader);
+    }
+    final storyRows = stories;
+    final bannerRows = data[_HomeFeed.banners] ?? [];
+    return LayoutBuilder(
+      builder: (context, bounds) {
+        final wide = bounds.maxWidth >= 700;
+        final gutter = _homeGutter(bounds.maxWidth);
+        final sections = <Widget>[
+          if (pending != null) const Center(child: loader),
+          if (errors.isNotEmpty && pending == null)
+            Material(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(18),
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
+                child: Row(
+                  children: [
+                    const Icon(Icons.cloud_off_outlined, size: 20),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        errors.length == _HomeFeed.values.length
+                            ? 'Нүүр хуудсыг ачаалж чадсангүй.'
+                            : 'Зарим хэсгийг ачаалж чадсангүй.',
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: () => _refresh(retry: true),
+                      child: const Text('Дахин оролдох'),
+                    ),
+                  ],
+                ),
+              ),
             ),
-            title: const Text(
-              'Онооны дэлгүүр',
-              style: TextStyle(fontWeight: FontWeight.w700),
+          if (storyRows.isNotEmpty)
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Сургалтын стори',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+                const SizedBox(height: 14),
+                _CourseStories(api: widget.api, stories: storyRows),
+              ],
             ),
-            trailing: const Icon(Icons.arrow_forward_rounded),
-            onTap: widget.onPoints,
-          ),
-        ),
-        const SizedBox(height: 14),
-        FutureBuilder<List<Record>>(
-          future: bannerRows,
-          builder: (context, snapshot) {
-            final rows = snapshot.data ?? [];
-            if (rows.isEmpty &&
-                snapshot.connectionState == ConnectionState.waiting) {
-              return Semantics(
-                label: 'Баннер уншиж байна',
-                child: const _HomeSkeleton(height: 224, radius: 14),
-              );
-            }
-            if (rows.isEmpty) return const SizedBox.shrink();
-            return Column(
+          if (bannerRows.isNotEmpty)
+            Stack(
               children: [
                 SizedBox(
-                  height: 224,
+                  height: ((bounds.maxWidth - 2 * gutter) * .53).clamp(
+                    170.0,
+                    (MediaQuery.sizeOf(context).height * .44).clamp(
+                      170.0,
+                      310.0,
+                    ),
+                  ),
                   child: PageView.builder(
                     controller: banners,
-                    itemCount: rows.length,
+                    itemCount: bannerRows.length,
                     onPageChanged: (page) => setState(() => active = page),
                     itemBuilder: (context, index) =>
-                        _HeroBanner(row: rows[index]),
+                        _HeroBanner(row: bannerRows[index]),
                   ),
                 ),
-                if (rows.length > 1)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 8),
-                    child: Text(
-                      '${(active + 1).clamp(1, rows.length)} / ${rows.length}',
-                      style: Theme.of(context).textTheme.labelSmall,
+                if (bannerRows.length > 1)
+                  Positioned(
+                    top: 14,
+                    right: 14,
+                    child: _GlassPill(
+                      icon: Icons.photo_library_outlined,
+                      text:
+                          '${active.clamp(0, bannerRows.length - 1) + 1} / ${bannerRows.length}',
                     ),
                   ),
               ],
-            );
-          },
-        ),
-        for (final entry in shelves.entries)
-          _HomeShelf(
-            api: widget.api,
-            catalog: entry.key,
-            future: entry.value,
-            title: switch (entry.key) {
-              Catalog.training => 'Танд зориулсан сургалтууд',
-              Catalog.courses => 'Танхимын сургалт',
-              Catalog.products => 'Шинэ бүтээгдэхүүн',
-              Catalog.news => 'Мэдээ мэдээлэл',
-              _ => entry.key.label,
-            },
-          ),
-      ],
-    ),
-  );
-}
-
-class _CatalogShortcuts extends StatelessWidget {
-  const _CatalogShortcuts({required this.api});
-  final ProductionApi api;
-
-  @override
-  Widget build(BuildContext context) => SizedBox(
-    height: 104,
-    child: ListView.separated(
-      scrollDirection: Axis.horizontal,
-      primary: false,
-      itemCount: 4,
-      separatorBuilder: (_, _) => const SizedBox(width: 10),
-      itemBuilder: (context, index) {
-        final catalog = [
-          Catalog.training,
-          Catalog.products,
-          Catalog.courses,
-          Catalog.news,
-        ][index];
-        return SizedBox(
-          width: 80,
-          child: InkWell(
-            borderRadius: BorderRadius.circular(18),
-            onTap: () => _openCatalog(context, api, catalog),
-            child: Column(
-              children: [
-                Container(
-                  width: 56,
-                  height: 56,
-                  decoration: const BoxDecoration(
-                    shape: BoxShape.circle,
-                    gradient: _brandGradient,
-                  ),
-                  child: Icon(catalog.icon, color: Colors.white),
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  catalog.label,
-                  textAlign: TextAlign.center,
-                  maxLines: 2,
-                  style: Theme.of(context).textTheme.labelMedium,
-                ),
-              ],
             ),
+          widget.gameTile,
+          for (final (feed, catalog, title) in const [
+            (_HomeFeed.online, Catalog.training, 'Танд зориулсан сургалтууд'),
+            (_HomeFeed.products, Catalog.products, 'Шинэ бүтээгдэхүүн'),
+            (_HomeFeed.classroom, Catalog.courses, 'Танхимын сургалт'),
+          ])
+            if (data[feed]?.isNotEmpty == true)
+              _HomeShelf(
+                api: widget.api,
+                catalog: catalog,
+                rows: data[feed]!,
+                title: title,
+              ),
+        ];
+        return RefreshIndicator.noSpinner(
+          onRefresh: _refresh,
+          child: ListView.separated(
+            key: const PageStorageKey('oyudent-home'),
+            physics: const AlwaysScrollableScrollPhysics(),
+            padding: EdgeInsets.fromLTRB(gutter, wide ? 24 : 14, gutter, 36),
+            itemCount: sections.length,
+            separatorBuilder: (_, _) => SizedBox(height: wide ? 32 : 24),
+            itemBuilder: (_, index) => sections[index],
           ),
         );
       },
-    ),
-  );
+    );
+  }
 }
 
 class _HeroBanner extends StatelessWidget {
@@ -193,52 +218,68 @@ class _HeroBanner extends StatelessWidget {
     final title = text(row, ['title']);
     final description = text(row, ['description']);
     final photo = text(row, ['image_path']);
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(24),
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          _WebsiteImage(url: photo, icon: Icons.photo_outlined),
-          if (title.isNotEmpty || description.isNotEmpty) ...[
-            const DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [Colors.transparent, Color(0xdd30256b)],
+    return Semantics(
+      button: true,
+      label: title.isEmpty ? 'Баннер үзэх' : title,
+      child: InkWell(
+        onTap: () => _push(context, _BannerDetail(row: row)),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(24),
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              _WebsiteImage(url: photo, icon: Icons.photo_outlined),
+              if (title.isNotEmpty || description.isNotEmpty) ...[
+                const DecoratedBox(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [Colors.transparent, Color(0xdd182e49)],
+                    ),
+                  ),
+                ),
+                Positioned(
+                  left: 16,
+                  right: 64,
+                  bottom: 16,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      if (title.isNotEmpty)
+                        Text(
+                          title,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 22,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      if (description.isNotEmpty)
+                        Text(
+                          description,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(color: Colors.white),
+                        ),
+                    ],
+                  ),
+                ),
+              ],
+              const Positioned(
+                right: 15,
+                bottom: 15,
+                child: CircleAvatar(
+                  radius: 17,
+                  backgroundColor: _highlight,
+                  child: Icon(Icons.arrow_outward, size: 18, color: _night),
                 ),
               ),
-            ),
-            Positioned(
-              left: 16,
-              right: 16,
-              bottom: 16,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  if (title.isNotEmpty)
-                    Text(
-                      title,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 22,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  if (description.isNotEmpty)
-                    Text(
-                      description,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(color: Colors.white),
-                    ),
-                ],
-              ),
-            ),
-          ],
-        ],
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -248,144 +289,93 @@ class _HomeShelf extends StatelessWidget {
   const _HomeShelf({
     required this.api,
     required this.catalog,
-    required this.future,
+    required this.rows,
     required this.title,
   });
   final ProductionApi api;
   final Catalog catalog;
-  final Future<List<Record>> future;
+  final List<Record> rows;
   final String title;
 
   @override
-  Widget build(BuildContext context) => FutureBuilder<List<Record>>(
-    future: future,
-    builder: (context, snapshot) {
-      final rows = snapshot.data ?? [];
-      final brands = catalog == Catalog.brands;
-      return Padding(
-        padding: const EdgeInsets.only(top: 14),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    title,
-                    style: Theme.of(context).textTheme.titleLarge
-                        ?.copyWith(fontWeight: FontWeight.w700),
-                  ),
-                ),
-                TextButton(
-                  onPressed: () => _openCatalog(context, api, catalog),
-                  child: const Text('Бүгдийг үзэх'),
-                ),
-              ],
-            ),
-            if (rows.isNotEmpty)
-              SizedBox(
-                height: brands
-                    ? 138
-                    : catalog == Catalog.courses
-                    ? 236
-                    : 215,
-                child: ListView.separated(
-                  primary: false,
-                  scrollDirection: Axis.horizontal,
-                  itemCount: rows.length,
-                  separatorBuilder: (_, _) => const SizedBox(width: 10),
-                  itemBuilder: (context, index) => SizedBox(
-                    width: brands ? 124 : 244,
-                    child: _WebStyleCard(
-                      api: api,
-                      catalog: catalog,
-                      row: rows[index],
-                      compact: true,
-                    ),
-                  ),
-                ),
-              )
-            else if (snapshot.connectionState == ConnectionState.waiting)
-              Semantics(
-                label: '$title уншиж байна',
-                child: SizedBox(
-                  height: brands
-                      ? 138
-                      : catalog == Catalog.courses
-                      ? 236
-                      : 215,
-                  child: ListView.separated(
-                    primary: false,
-                    physics: const NeverScrollableScrollPhysics(),
-                    scrollDirection: Axis.horizontal,
-                    itemCount: 4,
-                    separatorBuilder: (_, _) => const SizedBox(width: 10),
-                    itemBuilder: (_, _) => SizedBox(
-                      width: brands ? 124 : 244,
-                      child: _HomeCardSkeleton(brand: brands),
-                    ),
-                  ),
-                ),
-              )
-            else if (snapshot.hasError)
-              Text(
-                _message(snapshot.error!),
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-          ],
-        ),
-      );
-    },
-  );
-}
-
-class _HomeSkeleton extends StatelessWidget {
-  const _HomeSkeleton({required this.height, this.width, this.radius = 6});
-  final double height, radius;
-  final double? width;
-
-  @override
-  Widget build(BuildContext context) => Container(
-    width: width,
-    height: height,
-    decoration: BoxDecoration(
-      color: const Color(0xffe1e4f6),
-      borderRadius: BorderRadius.circular(radius),
-    ),
-  );
-}
-
-class _HomeCardSkeleton extends StatelessWidget {
-  const _HomeCardSkeleton({required this.brand});
-  final bool brand;
-
-  @override
-  Widget build(BuildContext context) => Card(
-    margin: EdgeInsets.zero,
-    elevation: 0,
-    color: Colors.white,
-    clipBehavior: Clip.antiAlias,
-    shape: RoundedRectangleBorder(
-      borderRadius: BorderRadius.circular(12),
-      side: const BorderSide(color: Color(0xffe1e4f6)),
-    ),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        _HomeSkeleton(height: brand ? 74 : 121, radius: 0),
-        Padding(
-          padding: const EdgeInsets.all(11),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _HomeSkeleton(height: 13, width: brand ? 70 : 155),
-              const SizedBox(height: 8),
-              _HomeSkeleton(height: 10, width: brand ? 42 : 98),
-            ],
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      Row(
+        children: [
+          Expanded(
+            child: Text(title, style: Theme.of(context).textTheme.titleLarge),
           ),
-        ),
-      ],
-    ),
+          const SizedBox(width: 10),
+          IconButton.outlined(
+            tooltip: '$title — бүгдийг үзэх',
+            onPressed: () => _openCatalog(context, api, catalog),
+            icon: const Icon(Icons.arrow_forward_rounded, size: 18),
+          ),
+        ],
+      ),
+      const SizedBox(height: 12),
+      LayoutBuilder(
+        builder: (context, bounds) {
+          final width = bounds.maxWidth;
+          final wide = width >= 640;
+          final scale = MediaQuery.textScalerOf(context).scale(16) / 16;
+          final courses =
+              catalog == Catalog.training || catalog == Catalog.courses;
+          if (courses && !wide) {
+            return _CourseSlides(
+              api: api,
+              catalog: catalog,
+              rows: rows,
+              compact: true,
+            );
+          }
+          if (wide) {
+            final columns = courses || width < 840 ? 2 : 3;
+            return Wrap(
+              spacing: 16,
+              runSpacing: 16,
+              children: [
+                for (final row in rows)
+                  SizedBox(
+                    width: (width - (columns - 1) * 16) / columns,
+                    height:
+                        (courses ? 235 : 228) + 64 * (scale - 1).clamp(0, 3),
+                    child: courses
+                        ? _CourseSlide(api: api, catalog: catalog, row: row)
+                        : _WebStyleCard(
+                            api: api,
+                            catalog: catalog,
+                            row: row,
+                            compact: true,
+                          ),
+                  ),
+              ],
+            );
+          }
+          return SizedBox(
+            height: 228 + 80 * (scale - 1).clamp(0, 3),
+            child: ListView.separated(
+              primary: false,
+              scrollDirection: Axis.horizontal,
+              itemCount: rows.length,
+              separatorBuilder: (_, _) => const SizedBox(width: 12),
+              itemBuilder: (_, i) => SizedBox(
+                width: rows.length == 1
+                    ? width
+                    : (width * .63).clamp(174.0, 270.0),
+                child: _WebStyleCard(
+                  api: api,
+                  catalog: catalog,
+                  row: rows[i],
+                  compact: true,
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    ],
   );
 }
 
@@ -411,8 +401,8 @@ class _WebStyleCard extends StatelessWidget {
       elevation: 0,
       color: Colors.white,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-        side: const BorderSide(color: Color(0xffe1e4f6)),
+        borderRadius: BorderRadius.circular(18),
+        side: const BorderSide(color: _line),
       ),
       clipBehavior: Clip.antiAlias,
       child: InkWell(
@@ -436,7 +426,7 @@ class _WebStyleCard extends StatelessWidget {
               ),
             ),
             Padding(
-              padding: const EdgeInsets.all(11),
+              padding: const EdgeInsets.all(14),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -490,7 +480,7 @@ class _WebsiteImage extends StatelessWidget {
         ? null
         : Uri.https('oyudent.com').resolveUri(uri);
     final placeholder = ColoredBox(
-      color: const Color(0xffe9e6ff),
+      color: const Color(0xffe3ebf4),
       child: Center(child: Icon(icon, color: _brand)),
     );
     return source?.scheme != 'https'
@@ -501,5 +491,63 @@ class _WebsiteImage extends StatelessWidget {
             width: double.infinity,
             errorBuilder: (_, _, _) => placeholder,
           );
+  }
+}
+
+class _BannerDetail extends StatelessWidget {
+  const _BannerDetail({required this.row});
+  final Record row;
+  @override
+  Widget build(BuildContext context) {
+    final raw = text(row, ['url']);
+    final uri = _https(
+      raw.startsWith('/')
+          ? Uri.https('oyudent.com').resolve(raw).toString()
+          : raw.contains('://')
+          ? raw
+          : 'https://$raw',
+    );
+    final title = text(row, ['title']);
+    final description = text(row, ['description']);
+    return Scaffold(
+      appBar: AppBar(title: Text(title.isEmpty ? 'Баннер' : title)),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          _FeatureHeader(
+            title: title.isEmpty ? 'Баннер' : title,
+            kind: 'Онцлох',
+            image: text(row, ['image_path']),
+            icon: Icons.photo_library_outlined,
+          ),
+          if (description.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 16),
+              child: Text(description),
+            ),
+          if (raw.isNotEmpty && uri != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 16),
+              child: FilledButton.icon(
+                icon: const Icon(Icons.open_in_new),
+                label: const Text('Холбоосыг нээх'),
+                onPressed: () async {
+                  try {
+                    if (await launchUrl(
+                      uri,
+                      mode: LaunchMode.externalApplication,
+                    )) {
+                      return;
+                    }
+                  } catch (_) {}
+                  if (context.mounted) {
+                    _notice(context, 'Холбоосыг нээж чадсангүй.');
+                  }
+                },
+              ),
+            ),
+        ],
+      ),
+    );
   }
 }
